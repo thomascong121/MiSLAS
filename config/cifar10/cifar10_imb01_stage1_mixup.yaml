@@ -6,7 +6,7 @@ model_dir: 'ckps'
 
 # dataset & model setting
 dataset: 'cifar10'
-data_path: './data/cifar10'
+data_path: '/scratch/sz65/cc0395/LT_ECCV/dataset/data'
 num_classes: 10
 imb_factor: 0.1
 backbone: 'resnet32_fe'

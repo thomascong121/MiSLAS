@@ -1,4 +1,4 @@
-name: cifar10_imb01_stage2_mislas
+name: cifar10_imb0005_stage2_mislas
 print_freq: 40
 workers: 16
 log_dir: 'logs'
@@ -8,7 +8,7 @@ model_dir: 'ckps'
 dataset: 'cifar10'
 data_path: '/scratch/sz65/cc0395/LT_ECCV/dataset/data'
 num_classes: 10
-imb_factor: 0.1
+imb_factor: 0.005
 backbone: 'resnet32_fe'
 resume: 'Path/to/Stage1_checkpoint.pth.tar'
 head_class_idx:

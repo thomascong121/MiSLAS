@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pprint
 import math
-
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -62,6 +62,12 @@ def main():
     logger, model_dir = create_logger(config, args.cfg)
     logger.info('\n' + pprint.pformat(args))
     logger.info('\n' + str(config))
+    project_name = 'LT_%s' % (config.dataset)
+    run_name = 'cifar10_imb%d_stage2_misalas' % (int(1/config.imb_factor))
+    wandb_config = {'dataset': config.dataset, 'use_model': config.backbone, 'lr': config.lr,
+                    'batch_size': config.batch_size, 'use_mixup': config.mixup,
+                    'num_classes': config.num_classes, 'epochs': config.num_epochs}
+    wandb.init(project=project_name, name=run_name, config=wandb_config) # require testing
 
     if config.deterministic:
         seed = 0
@@ -210,6 +216,7 @@ def main_worker(gpu, ngpus_per_node, config, logger, model_dir):
     if config.dataset == 'cifar10':
         dataset = CIFAR10_LT(config.distributed, root=config.data_path, imb_factor=config.imb_factor,
                              batch_size=config.batch_size, num_works=config.workers)
+        print(dataset.cls_num_list)
 
     elif config.dataset == 'cifar100':
         dataset = CIFAR100_LT(config.distributed, root=config.data_path, imb_factor=config.imb_factor,
@@ -244,6 +251,9 @@ def main_worker(gpu, ngpus_per_node, config, logger, model_dir):
                                 weight_decay=config.weight_decay)
 
     for epoch in range(config.num_epochs):
+        stat_dct = {}
+        for i in range(config.num_classes):
+            stat_dct[i] = 0
         if config.distributed:
             train_sampler.set_epoch(epoch)
 
@@ -252,16 +262,29 @@ def main_worker(gpu, ngpus_per_node, config, logger, model_dir):
         if config.dataset != 'places':
             block = None
         # train for one epoch
-        train(train_loader, model, classifier, lws_model, criterion, optimizer, epoch, config, logger, block)
+        train_loss, train_acc = train(train_loader, model, classifier, lws_model, criterion, optimizer, epoch, config, logger, block)
+        train_metrics = {"train/train_loss": train_loss,
+                         "train/lr": optimizer.param_groups[0]['lr'],
+                         "train/train_acc": train_acc}
+        wandb.log(train_metrics)
+        wandb.summary["train/best_accuracy"] = train_acc
 
         # evaluate on validation set
-        acc1, ece = validate(val_loader, model, classifier, lws_model, criterion, config, logger, block)
+        acc1, ece, acc_per_cl = validate(val_loader, model, classifier, lws_model, criterion, config, logger, block, stat_dct)
+        val_metrics = {"val/val_acc": acc1,
+                       "val/val_ece": ece}
+        wandb.log(val_metrics)
+        acc_per_cl_dict = {}
+        for i in range(len(acc_per_cl)):
+            acc_per_cl_dict['Class_%d' % i] = acc_per_cl[i] / 1000
+        wandb.log(acc_per_cl_dict)
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
         if is_best:
             its_ece = ece
         logger.info('Best Prec@1: %.3f%% ECE: %.3f%%\n' % (best_acc1, its_ece))
+        wandb.summary["test/best_accuracy"] = best_acc1
         if not config.multiprocessing_distributed or (config.multiprocessing_distributed
                                                       and config.rank % ngpus_per_node == 0):
             if config.dataset == 'places':
@@ -363,9 +386,10 @@ def train(train_loader, model, classifier, lws_model, criterion, optimizer, epoc
 
         if i % config.print_freq == 0:
             progress.display(i, logger)
+    return losses.avg, top1.avg
 
 
-def validate(val_loader, model, classifier, lws_model, criterion, config, logger, block=None):
+def validate(val_loader, model, classifier, lws_model, criterion, config, logger, block=None, stat_dct=None):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.3f')
     top1 = AverageMeter('Acc@1', ':6.3f')
@@ -406,6 +430,7 @@ def validate(val_loader, model, classifier, lws_model, criterion, config, logger
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            stat_dct = acc_per_class(output, target, stat_dct)
             losses.update(loss.item(), images.size(0))
             top1.update(acc1[0], images.size(0))
             top5.update(acc5[0], images.size(0))
@@ -439,7 +464,7 @@ def validate(val_loader, model, classifier, lws_model, criterion, config, logger
         cal = calibration(true_class, pred_class, confidence, num_bins=15)
         logger.info('* ECE   {ece:.3f}%.'.format(ece=cal['expected_calibration_error'] * 100))
 
-    return top1.avg, cal['expected_calibration_error'] * 100
+    return top1.avg, cal['expected_calibration_error'] * 100, stat_dct
 
 
 def save_checkpoint(state, is_best, model_dir):
@@ -460,6 +485,20 @@ def adjust_learning_rate(optimizer, epoch, config):
             param_group['lr'] = config.lr_factor * lr
         else:
             param_group['lr'] = 1.00 * lr
+
+def acc_per_class(output, target, stat_dict, top1=False):
+    with torch.no_grad():
+        batch_size = target.size(0)
+        if top1:
+            for i in range(len(target)):
+                if output[i] == target[i]:
+                    stat_dict[target[i].item()] += 1
+        else:
+            _, pred = output.topk(1, 1, True, True)
+            for i in range(len(target)):
+                if pred[i] == target[i]:
+                    stat_dict[target[i].item()] += 1
+        return stat_dict
 
 
 if __name__ == '__main__':

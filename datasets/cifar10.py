@@ -78,8 +78,8 @@ class CIFAR10_LT(object):
         ])
         
         
-        train_dataset = IMBALANCECIFAR10(root=root, imb_type=imb_type, imb_factor=imb_factor, rand_number=0, train=True, download=True, transform=train_transform)
-        eval_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=eval_transform)
+        train_dataset = IMBALANCECIFAR10(root=root, imb_type=imb_type, imb_factor=imb_factor, rand_number=0, train=True, download=False, transform=train_transform)
+        eval_dataset = torchvision.datasets.CIFAR10(root=root, train=False, download=False, transform=eval_transform)
         
         self.cls_num_list = train_dataset.get_cls_num_list()
 
@@ -87,15 +87,15 @@ class CIFAR10_LT(object):
         self.train_instance = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=batch_size, shuffle=True,
-            num_workers=num_works, pin_memory=True, sampler=self.dist_sampler)
+            num_workers=num_works, pin_memory=False, sampler=self.dist_sampler)
 
         balance_sampler = ClassAwareSampler(train_dataset)
         self.train_balance = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=batch_size, shuffle=False,
-            num_workers=num_works, pin_memory=True, sampler=balance_sampler)
+            num_workers=num_works, pin_memory=False, sampler=balance_sampler)
 
         self.eval = torch.utils.data.DataLoader(
             eval_dataset,
             batch_size=batch_size, shuffle=False,
-            num_workers=num_works, pin_memory=True)
+            num_workers=num_works, pin_memory=False)
